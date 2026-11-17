@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # My Git Flow
 
 研发协作工作台。前端复用 DeerFlow 及其研发协作页面，后端与 Agent 在此项目中独立实现。当前目录包含前端源码、依赖锁文件和许可证。
@@ -24,3 +25,7 @@ npx --yes pnpm@10.26.2 run dev
 前端接口的参考入口在 `frontend/src/core/config/index.ts`、`frontend/src/core/threads/hooks.ts` 和 `frontend/src/core/models/hooks.ts`。现有聊天界面使用 LangGraph SDK。如果你选择自定义聊天协议，需要同时修改前端的会话与流式请求代码。首页任务模板位于 `frontend/src/core/rd-tasks.ts`，其中的工具名是后续联调约定。
 
 前端来源为 [DeerFlow](https://github.com/bytedance/deer-flow) 和 [DeerFlow 2.0 Enhanced](https://github.com/stophobia/deerflow2.0-enhanced)。许可见 [LICENSE](LICENSE)。
+=======
+# my_flow
+学习测试myflow
+>>>>>>> 56dae8ebc4918a4be32ccf591c31584a8d749473
