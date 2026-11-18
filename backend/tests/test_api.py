@@ -14,3 +14,11 @@ class ApiTests(unittest.TestCase):
             "items": [{"status": "completed", "conclusion": "success"}],
         }
         self.assertEqual(_assess_ci(checks), "insufficient_evidence")
+
+    def test_running_check_is_pending(self):
+        # 检查还在运行，没有结论是正常状态。
+        checks = {
+            "status": "available",
+            "items": [{"status": "in_progress", "conclusion": None}],
+        }
+        self.assertEqual(_assess_ci(checks), "pending")
