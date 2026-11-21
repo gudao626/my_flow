@@ -1,13 +1,18 @@
-from uuid import UUID
+from time import perf_counter
+import sqlite3
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, constr
+from starlette.concurrency import run_in_threadpool
 
 from .chat_graph import chat_graph
 from .llm import ModelConfigError, ModelResponseError
 from .sessions import MAX_HISTORY_MESSAGES, create_session, sessions
+from .execution import ExecutionSummary, build_execution_summary
+from .execution_store import execution_store
 
 class UTF8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
@@ -36,6 +41,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    execution: ExecutionSummary
 
 
 class SessionResponse(BaseModel):
@@ -52,6 +58,9 @@ async def new_session() -> SessionResponse:
 
 @app.post("/api/chat", response_model=ChatResponse, response_class=UTF8JSONResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
+    # 每次请求都有独立 ID；耗时包括模型、工具及会话锁等待，不是 token 计费数据。
+    trace_id = uuid4()
+    started = perf_counter()
     try:
         if request.session_id is None:
             result = await chat_graph.ainvoke({"message": request.message, "history": []})
@@ -81,7 +90,28 @@ async def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=502, detail="The model provider URL is invalid.") from None
     except ModelResponseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
-    return ChatResponse(reply=reply)
+    response = ChatResponse(
+        reply=reply,
+        execution=build_execution_summary(result, trace_id, round((perf_counter() - started) * 1000, 3)),
+    )
+    try:
+        # SQLite 是同步接口，放到线程池，避免磁盘操作阻塞异步事件循环。
+        await run_in_threadpool(execution_store.save, response.execution)
+    except (sqlite3.Error, OSError):
+        raise HTTPException(status_code=503, detail="Execution storage unavailable.") from None
+    return response
+
+
+@app.get("/api/executions/{trace_id}", response_model=ExecutionSummary)
+def get_execution(trace_id: UUID) -> ExecutionSummary:
+    # 普通 def 路由由 FastAPI 在线程池执行，适合这里的同步数据库读取。
+    try:
+        summary = execution_store.get(trace_id)
+    except (sqlite3.Error, OSError):
+        raise HTTPException(status_code=503, detail="Execution storage unavailable.") from None
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Execution not found.")
+    return summary
 
 
 @app.get("/health")
