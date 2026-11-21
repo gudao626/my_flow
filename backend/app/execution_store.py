@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from uuid import UUID
 
-from .execution import ExecutionSummary
+from .execution import ExecutionPage, ExecutionSummary
 
 
 class ExecutionStore:
@@ -30,6 +30,31 @@ class ExecutionStore:
                     "INSERT INTO executions (trace_id, summary_json) VALUES (?, ?)",
                     (str(summary.trace_id), summary.model_dump_json()),
                 )
+        finally:
+            connection.close()
+
+    def list_page(self, limit: int, offset: int, finish_reason: str | None = None) -> ExecutionPage:
+        if not 1 <= limit <= 50 or offset < 0:
+            raise ValueError("Invalid pagination bounds.")
+        if finish_reason not in {None, "completed", "tool_budget_exhausted"}:
+            raise ValueError("Invalid finish reason.")
+        connection = self._connect()
+        try:
+            # 同一读事务内取得总数与当前页，避免两次 SQL 之间有新写入导致不一致。
+            connection.execute("BEGIN")
+            where = " WHERE json_extract(summary_json, '$.finish_reason') = ?" if finish_reason else ""
+            parameters = (finish_reason,) if finish_reason else ()
+            total = connection.execute("SELECT COUNT(*) FROM executions" + where, parameters).fetchone()[0]
+            # created_at 只有秒级精度；相同时间用 rowid 打破平局，最新写入在前。
+            rows = connection.execute(
+                "SELECT summary_json FROM executions" + where
+                + " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                (*parameters, limit, offset),
+            ).fetchall()
+            return ExecutionPage(
+                total=total, limit=limit, offset=offset,
+                items=[ExecutionSummary.model_validate_json(row[0]) for row in rows],
+            )
         finally:
             connection.close()
 

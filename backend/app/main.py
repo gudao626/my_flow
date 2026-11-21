@@ -1,9 +1,10 @@
 from time import perf_counter
+from typing import Annotated, Literal
 import sqlite3
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, constr
 from starlette.concurrency import run_in_threadpool
@@ -11,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from .chat_graph import chat_graph
 from .llm import ModelConfigError, ModelResponseError
 from .sessions import MAX_HISTORY_MESSAGES, create_session, sessions
-from .execution import ExecutionSummary, build_execution_summary
+from .execution import ExecutionPage, ExecutionSummary, build_execution_summary
 from .execution_store import execution_store
 
 class UTF8JSONResponse(JSONResponse):
@@ -100,6 +101,19 @@ async def chat(request: ChatRequest) -> ChatResponse:
     except (sqlite3.Error, OSError):
         raise HTTPException(status_code=503, detail="Execution storage unavailable.") from None
     return response
+
+
+@app.get("/api/executions", response_model=ExecutionPage)
+def list_executions(
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    finish_reason: Literal["completed", "tool_budget_exhausted"] | None = None,
+) -> ExecutionPage:
+    # HTTP 层先校验参数；同步路由在线程池中访问数据库。
+    try:
+        return execution_store.list_page(limit, offset, finish_reason)
+    except (sqlite3.Error, OSError):
+        raise HTTPException(status_code=503, detail="Execution storage unavailable.") from None
 
 
 @app.get("/api/executions/{trace_id}", response_model=ExecutionSummary)

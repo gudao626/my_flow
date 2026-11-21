@@ -30,6 +30,13 @@ class ExecutionSummary(BaseModel):
     tools: list[ToolExecution] = Field(default_factory=list)
 
 
+class ExecutionPage(BaseModel):
+    total: int = Field(ge=0)
+    limit: int
+    offset: int
+    items: list[ExecutionSummary]
+
+
 def classify_tool_result(content: str) -> ToolStatus:
     # HTTP 请求可能成功，但工具返回了结构化错误；不能仅凭没抛异常判断成功。
     # completed 只表示工具完成，不代表 CI 成功或代码允许合并。
