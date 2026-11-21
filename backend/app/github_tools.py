@@ -1,7 +1,23 @@
+import os
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+from dotenv import load_dotenv
+
+# 固定从 backend/.env 加载；系统环境变量优先于文件中的配置。
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+
+
+def _build_github_headers() -> dict[str, str]:
+    """构建工具请求头；凭证只用于后端请求，不进入模型上下文。"""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    # 留空时允许匿名访问；避免发送无效的空 Bearer 请求头。
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 PR_TOOL = {
     "type": "function",
@@ -21,6 +37,15 @@ _PR_PATH = re.compile(r"/([a-zA-Z0-9-]+)/([a-zA-Z0-9_.-]+)/pull/([1-9][0-9]{0,18
 _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 _PENDING_STATUSES = {"queued", "in_progress", "requested", "waiting", "pending"}
+
+
+def _parse_pr_url(pr_url: str) -> tuple[str, str, str]:
+    """所有 PR 工具共用地址校验，避免不同工具的访问规则不一致。"""
+    url = urlsplit(pr_url.strip())
+    match = _PR_PATH.fullmatch(url.path)
+    if url.scheme != "https" or url.netloc.lower() != "github.com" or not match or match[2] in {".", ".."}:
+        raise ValueError("Expected https://github.com/owner/repo/pull/123.")
+    return match.groups()
 
 
 def _assess_ci(check_runs: dict) -> str:
@@ -69,18 +94,16 @@ async def _get_commit_checks(client: httpx.AsyncClient, repo_path: str, sha: str
 async def get_github_pr(pr_url: str) -> dict:
     # 只提取仓库和 PR 编号。HTTP 请求始终发往代码指定的 GitHub API。
     try:
-        url = urlsplit(pr_url.strip())
+        owner, repo, number = _parse_pr_url(pr_url)
     except ValueError:
         return {"error": "Invalid GitHub PR URL."}
-    match = _PR_PATH.fullmatch(url.path)
-    if url.scheme != "https" or url.netloc.lower() != "github.com" or not match or match[2] in {".", ".."}:
-        return {"error": "Expected https://github.com/owner/repo/pull/123."}
-
-    owner, repo, number = match.groups()
     repo_path = f"/repos/{owner}/{repo}"
     try:
         async with httpx.AsyncClient(
-            base_url="https://api.github.com", timeout=10, headers={"Accept": "application/vnd.github+json"}
+            base_url="https://api.github.com",
+            timeout=10,
+            # PR 与 CI 查询共用这个客户端，因此两次请求都会使用认证头。
+            headers=_build_github_headers(),
         ) as client:
             response = await client.get(f"{repo_path}/pulls/{number}")
             response.raise_for_status()
